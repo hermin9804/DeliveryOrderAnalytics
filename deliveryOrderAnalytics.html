@@ -1,0 +1,377 @@
+﻿<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <title>청담족발 주문분석</title>
+    <style>
+      table {
+        border-collapse: collapse;
+        width: 30%;
+        max-width: 800px;
+        margin: 20px 0;
+      }
+      th,
+      td {
+        border: 1px solid #ddd;
+        padding: 8px;
+        text-align: left;
+      }
+      th {
+        background-color: #f4f4f4;
+      }
+      .file-input {
+        margin: 20px 0;
+      }
+      .filter-input {
+        margin: 10px 0;
+      }
+      .number-cell {
+        text-align: right;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="file-input">
+      <input type="file" id="fileInput" accept=".csv" />
+    </div>
+
+    <div class="filter-input">
+      <label for="startDate">시작 날짜: </label>
+      <input type="date" id="startDate" />
+      <label for="startTime">시작 시간: </label>
+      <input type="time" id="startTime" />
+      <br />
+      <label for="endDate">종료 날짜: </label>
+      <input type="date" id="endDate" />
+      <label for="endTime">종료 시간: </label>
+      <input type="time" id="endTime" />
+      <button onclick="applyTimeFilter()">필터 적용</button>
+    </div>
+
+    <h3>앱 주문건수 분석</h3>
+    <table id="resultsTable">
+      <thead>
+        <tr>
+          <th>앱 종류</th>
+          <th style="text-align: right">주문 개수</th>
+          <th style="text-align: right">총 매출</th>
+          <th style="text-align: right">비율</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>지역 정보 비율 (쿠팡이츠, 요기배달, 배민포장, 포장 제외)</h3>
+    <table id="dongRatioTable">
+      <thead>
+        <tr>
+          <th>지역</th>
+          <th style="text-align: right">주문 개수</th>
+          <th style="text-align: right">비율</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <h3>시간당 주문 수</h3>
+    <table id="hourlyOrdersTable">
+      <thead>
+        <tr>
+          <th>시간</th>
+          <th style="text-align: right">건수</th>
+          <th style="text-align: right">비율</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+
+    <script>
+      let csvData = [];
+      let orders = [];
+      let orderdLocationData = {};
+      let hourlyOrdersData = {};
+
+      document
+        .getElementById("fileInput")
+        .addEventListener("change", function (event) {
+          const file = event.target.files[0];
+          if (file) {
+            readCSV(file);
+          }
+        });
+
+      function readCSV(file) {
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          const content = e.target.result;
+          try {
+            processCSV(content);
+          } catch (error) {
+            console.warn(
+              "Failed to process UTF-8, retrying with EUC-KR:",
+              error
+            );
+            const decoder = new TextDecoder("euc-kr");
+            const buffer = new Uint8Array(e.target.result);
+            const text = decoder.decode(buffer);
+            processCSV(text);
+          }
+        };
+        reader.onerror = function (err) {
+          console.error("File reading error:", err);
+        };
+        reader.readAsArrayBuffer(file);
+      }
+
+      function processCSV(data) {
+        const rows = data
+          .split("\n")
+          .map((row) => row.trim())
+          .filter((row) => row);
+        const dataRows = rows.slice(1);
+
+        orders = dataRows.map((row) => {
+          const cols = row.split(",");
+          const datetime = cols[0]?.trim();
+          const appType = parseAppType(cols[3]?.trim(), cols[16]?.trim());
+          const address = cols[16]?.trim();
+          const orderAmount = parseInt(cols[5]?.replace(/[^\d]/g, ""), 10) || 0;
+          const location = extractLocation({ appType, address });
+
+          return {
+            datetime,
+            appType,
+            address,
+            orderAmount,
+            location,
+          };
+        });
+
+        applyTimeFilter();
+      }
+
+      function parseAppType(app, address) {
+        if (app.includes("배민")) {
+          if (address.includes("배민원")) return "배민원";
+          if (address.includes("배민오더")) return "배민포장";
+          return "배민일반";
+        }
+        if (app.includes("요기요")) {
+          if (address.includes("요기배달")) return "요기배달";
+          return "요기일반";
+        }
+        if (app.includes("쿠팡이츠")) return "쿠팡이츠";
+        if (app.includes("배달특급")) return "배달특급";
+        if (app.includes("포장")) return "포장";
+        return "기타";
+      }
+
+      function extractLocation(order) {
+        const { appType, address } = order;
+
+        if (appType === "배민원") {
+          const addressParts = address.split("(");
+          return addressParts.length > 1 ? addressParts[0].trim() : "";
+        }
+        if (["배민일반", "요기일반", "배달특급"].includes(appType)) {
+          const addressParts = address.split(" ");
+          return addressParts[2] || "";
+        }
+        return "";
+      }
+
+      function applyTimeFilter() {
+        const startDateInput = document.getElementById("startDate").value;
+        const startTimeInput = document.getElementById("startTime").value;
+        const endDateInput = document.getElementById("endDate").value;
+        const endTimeInput = document.getElementById("endTime").value;
+
+        const startDateTime =
+          startDateInput && startTimeInput
+            ? new Date(`${startDateInput}T${startTimeInput}`)
+            : null;
+        const endDateTime =
+          endDateInput && endTimeInput
+            ? new Date(`${endDateInput}T${endTimeInput}`)
+            : null;
+
+        const filteredData = orders.filter((order) => {
+          const orderDateTime = new Date(order.datetime);
+          return (
+            (!startDateTime || orderDateTime >= startDateTime) &&
+            (!endDateTime || orderDateTime <= endDateTime)
+          );
+        });
+
+        const appOrders = {
+          배민원: { count: 0, revenue: 0 },
+          배민포장: { count: 0, revenue: 0 },
+          배민일반: { count: 0, revenue: 0 },
+          요기배달: { count: 0, revenue: 0 },
+          요기일반: { count: 0, revenue: 0 },
+          쿠팡이츠: { count: 0, revenue: 0 },
+          배달특급: { count: 0, revenue: 0 },
+          포장: { count: 0, revenue: 0 },
+          기타: { count: 0, revenue: 0 },
+        };
+
+        orderdLocationData = {};
+        hourlyOrdersData = {};
+
+        filteredData.forEach((order) => {
+          const orderDateTime = new Date(order.datetime);
+          const orderHour = `${orderDateTime.getFullYear()}-${(
+            orderDateTime.getMonth() + 1
+          )
+            .toString()
+            .padStart(2, "0")}-${orderDateTime
+            .getDate()
+            .toString()
+            .padStart(2, "0")} ${orderDateTime
+            .getHours()
+            .toString()
+            .padStart(2, "0")}`;
+
+          if (!hourlyOrdersData[orderHour]) {
+            hourlyOrdersData[orderHour] = 0;
+          }
+          hourlyOrdersData[orderHour]++;
+
+          if (appOrders[order.appType]) {
+            appOrders[order.appType].count++;
+            appOrders[order.appType].revenue += order.orderAmount;
+          }
+
+          if (order.location && !orderdLocationData[order.location]) {
+            orderdLocationData[order.location] = { count: 0 };
+          }
+          if (order.location) {
+            orderdLocationData[order.location].count++;
+          }
+        });
+
+        updateTable(appOrders);
+        updateDongRatioTable();
+        updateHourlyOrdersTable();
+      }
+
+      function updateTable(appOrders) {
+        const tbody = document.querySelector("#resultsTable tbody");
+        tbody.innerHTML = "";
+
+        const totalCount = Object.values(appOrders).reduce(
+          (sum, data) => sum + data.count,
+          0
+        );
+        const totalRevenue = Object.values(appOrders).reduce(
+          (sum, data) => sum + data.revenue,
+          0
+        );
+
+        Object.entries(appOrders).forEach(([app, data]) => {
+          const row = tbody.insertRow();
+          row.insertCell(0).textContent = app;
+          const countCell = row.insertCell(1);
+          const revenueCell = row.insertCell(2);
+          const percentageCell = row.insertCell(3);
+
+          countCell.textContent = data.count;
+          revenueCell.textContent = data.revenue.toLocaleString() + "원";
+
+          const percentage = totalCount
+            ? Math.round((data.count / totalCount) * 100)
+            : 0;
+          percentageCell.textContent = percentage + "%";
+
+          countCell.className = "number-cell";
+          revenueCell.className = "number-cell";
+          percentageCell.className = "number-cell";
+        });
+
+        const totalRow = tbody.insertRow();
+        totalRow.insertCell(0).textContent = "총계";
+        totalRow.insertCell(1).textContent = totalCount;
+        totalRow.insertCell(2).textContent =
+          totalRevenue.toLocaleString() + "원";
+        totalRow.insertCell(3).textContent = "100%";
+
+        tbody.querySelectorAll("td").forEach((cell) => {
+          cell.className = "number-cell";
+        });
+      }
+
+      function updateDongRatioTable() {
+        const tbody = document.querySelector("#dongRatioTable tbody");
+        tbody.innerHTML = "";
+
+        const totalOrders = Object.values(orderdLocationData).reduce(
+          (sum, data) => sum + data.count,
+          0
+        );
+        const sortedLocationData = Object.entries(orderdLocationData).sort(
+          (a, b) => b[1].count - a[1].count
+        );
+
+        sortedLocationData.forEach(([dong, data]) => {
+          const row = tbody.insertRow();
+          row.insertCell(0).textContent = dong;
+          const countCell = row.insertCell(1);
+          const percentageCell = row.insertCell(2);
+
+          countCell.textContent = data.count;
+          const percentage = totalOrders
+            ? Math.round((data.count / totalOrders) * 100)
+            : 0;
+          percentageCell.textContent = percentage + "%";
+
+          countCell.className = "number-cell";
+          percentageCell.className = "number-cell";
+        });
+
+        const totalRow = tbody.insertRow();
+        totalRow.insertCell(0).textContent = "총계";
+        totalRow.insertCell(1).textContent = totalOrders;
+        totalRow.insertCell(2).textContent = "100%";
+
+        totalRow.querySelectorAll("td").forEach((cell) => {
+          cell.className = "number-cell";
+        });
+      }
+
+      function updateHourlyOrdersTable() {
+        const tbody = document.querySelector("#hourlyOrdersTable tbody");
+        tbody.innerHTML = "";
+
+        const totalHourlyOrders = Object.values(hourlyOrdersData).reduce(
+          (sum, count) => sum + count,
+          0
+        );
+
+        Object.entries(hourlyOrdersData).forEach(([hour, count]) => {
+          const row = tbody.insertRow();
+          row.insertCell(0).textContent = hour;
+          const countCell = row.insertCell(1);
+          const percentageCell = row.insertCell(2);
+
+          countCell.textContent = count;
+          const percentage = totalHourlyOrders
+            ? Math.round((count / totalHourlyOrders) * 100)
+            : 0;
+          percentageCell.textContent = percentage + "%";
+
+          countCell.className = "number-cell";
+          percentageCell.className = "number-cell";
+        });
+
+        const totalRow = tbody.insertRow();
+        totalRow.insertCell(0).textContent = "총계";
+        totalRow.insertCell(1).textContent = totalHourlyOrders;
+        totalRow.insertCell(2).textContent = "100%";
+
+        totalRow.querySelectorAll("td").forEach((cell) => {
+          cell.className = "number-cell";
+        });
+      }
+    </script>
+  </body>
+</html>
